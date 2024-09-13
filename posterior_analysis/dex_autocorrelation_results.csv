@@ -1,1 +1,3 @@
-
+protocol,Durbin-Watson statistic,Autocorrelation,S&P 500 coefficient,S&P 500 p-value
+Izumi,1.4221286660994448,Positive,11191.39192844654,0.6958775033378704
+jupiter,0.8006546541545462,Positive,75668.59224897693,0.9288199210807246
