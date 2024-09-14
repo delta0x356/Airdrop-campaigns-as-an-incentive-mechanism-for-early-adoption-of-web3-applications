@@ -94,12 +94,20 @@ def analyze_protocol_type(folder_path, metric_name, protocol_type, mc_data, fgi_
                     model = fit_model(df, metric_name)
                     dw_statistic = check_autocorrelation(model)
 
+                    # Calculate Durbin-Watson statistics for Fear and Greed Index and Market Cap
+                    fgi_model = sm.OLS(df['Fear_Greed_Index'], sm.add_constant(df[['T']])).fit()
+                    mc_model = sm.OLS(df['MCt'], sm.add_constant(df[['T']])).fit()
+                    fgi_dw = durbin_watson(fgi_model.resid)
+                    mc_dw = durbin_watson(mc_model.resid)
+
                     autocorrelation_results.append({
                         'protocol': protocol_name,
                         'Durbin-Watson statistic': dw_statistic,
                         'Autocorrelation': 'Positive' if dw_statistic < 1.5 else ('Negative' if dw_statistic > 2.5 else 'No evidence'),
                         'S&P 500 coefficient': model.params['Close'],
-                        'S&P 500 p-value': model.pvalues['Close']
+                        'S&P 500 p-value': model.pvalues['Close'],
+                        'Fear and Greed Index DW': fgi_dw,
+                        'Market Cap DW': mc_dw
                     })
             except Exception as e:
                 print(f"Error processing {file}: {str(e)}")
