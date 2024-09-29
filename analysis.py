@@ -58,8 +58,15 @@ def prepare_data(file_path, metric_name, mc_data, sp500_data, fgi_data, airdrop_
 
     return df, airdrop_date
 
-def fit_model(df, metric_name):
-    X = sm.add_constant(df[['T', 'X', 'X_T', 't', 't_X', 'MCt', 'Close', 'Fear_Greed_Index']])
+def fit_model(df, metric_name, protocol_type):
+    if protocol_type == 'DeFi':
+        prefix = 'α'
+    elif protocol_type == 'DEX':
+        prefix = 'β'
+    else:  # SocialFi
+        prefix = 'γ'
+
+    X = sm.add_constant(df[['T', 'X', 'X_T', 't', 't_X', 'MCt', 'Fear_Greed_Index', 'Close']])
     y = df[metric_name]
 
     # First, fit OLS model
@@ -88,7 +95,37 @@ def fit_model(df, metric_name):
         print("No heteroskedasticity detected. Using OLS.")
         final_model = adjusted_model
 
-    return final_model, arima_model
+    # Calculate predicted values
+    predicted_values = final_model.predict(X) + arima_model.fittedvalues
+
+    results = {
+        'protocol': df['protocol_name'].iloc[0],
+        f'{prefix}0 (Intercept)': final_model.params['const'],
+        f'{prefix}1 (T)': final_model.params['T'],
+        f'{prefix}2 (X)': final_model.params['X'],
+        f'{prefix}3 (X_T)': final_model.params['X_T'],
+        f'{prefix}4 (t)': final_model.params['t'],
+        f'{prefix}5 (t_X)': final_model.params['t_X'],
+        'δ1 (MCt)': final_model.params['MCt'],
+        'δ2 (Fear_Greed_Index)': final_model.params['Fear_Greed_Index'],
+        'δ3 (S&P 500)': final_model.params['Close'],
+        'p_value (X)': final_model.pvalues['X'],
+        'p_value (X_T)': final_model.pvalues['X_T'],
+        'p_value (MCt)': final_model.pvalues['MCt'],
+        'p_value (Fear_Greed_Index)': final_model.pvalues['Fear_Greed_Index'],
+        'p_value (S&P 500)': final_model.pvalues['Close'],
+        'ARIMA_AR': arima_model.arparams[0],
+        'ARIMA_MA': arima_model.maparams[0],
+        'airdrop_date': df['airdrop_date'].iloc[0]
+    }
+
+    # Add predicted values and model components to the dataframe
+    df['predicted_values'] = predicted_values
+    df['residuals'] = y - predicted_values
+    for col in X.columns:
+        df[f'component_{col}'] = final_model.params[col] * X[col]
+
+    return results, df
 
 # Load airdrop dates
 airdrop_dates = pd.read_csv('airdrop_date.csv')
@@ -129,8 +166,6 @@ for folder, metric, protocol_type in protocol_types:
                 continue
             
             airdrop_date = airdrop_dates[airdrop_dates['Name'] == protocol_name]['Date'].values[0]
-            
-            # Ensure airdrop_date is a datetime object
             airdrop_date = pd.to_datetime(airdrop_date)
             
             file_path = os.path.join(folder, file)
@@ -139,75 +174,59 @@ for folder, metric, protocol_type in protocol_types:
                 df, actual_airdrop_date = prepare_data(file_path, metric, mc_data, sp500_data, fgi_data, airdrop_date)
                 
                 if df is not None:
-                    final_model, arima_model = fit_model(df, metric)
-                    all_results.append({
-                        'protocol': protocol_name,
-                        'α0 or β0 or γ0 (Intercept)': final_model.params['const'],
-                        'α1 or β1 or γ1 (T)': final_model.params['T'],
-                        'α2 or β2 or γ2 (X)': final_model.params['X'],
-                        'α3 or β3 or γ3 (X*T)': final_model.params['X_T'],
-                        'α4 or β4 or γ4 (t)': final_model.params['t'],
-                        'α5 or β5 or γ5 (t*X)': final_model.params['t_X'],
-                        'δ1 (MCt)': final_model.params['MCt'],
-                        'δ2 (Fear_Greed_Index)': final_model.params['Fear_Greed_Index'],
-                        'S&P 500': final_model.params['Close'],
-                        'p_value (X)': final_model.pvalues['X'],
-                        'p_value (X*T)': final_model.pvalues['X_T'],
-                        'p_value (MCt)': final_model.pvalues['MCt'],
-                        'p_value (Fear_Greed_Index)': final_model.pvalues['Fear_Greed_Index'],
-                        'p_value (S&P 500)': final_model.pvalues['Close'],
-                        'ARIMA_AR': arima_model.arparams[0],
-                        'ARIMA_MA': arima_model.maparams[0],
-                        'airdrop_date': actual_airdrop_date
-                    })
+                    df['protocol_name'] = protocol_name
+                    df['airdrop_date'] = actual_airdrop_date
+                    results, df_with_predictions = fit_model(df, metric, protocol_type)
+                    all_results.append(results)
+                    
+                    # Save detailed predictions
+                    predictions_folder = 'predicted values'
+                    if not os.path.exists(predictions_folder):
+                        os.makedirs(predictions_folder)
+                    df_with_predictions.to_csv(os.path.join(predictions_folder, f'{protocol_name}_detailed_predictions.csv'), index=False)
                 else:
                     failed_protocols.append((protocol_name, protocol_type, "Insufficient data"))
             except Exception as e:
                 print(f"Error processing {protocol_name}: {str(e)}")
-                print(f"Airdrop date: {airdrop_date}")
-                print(f"Market cap date range: {mc_data['Date'].min()} to {mc_data['Date'].max()}")
-                print(f"S&P 500 date range: {sp500_data['Date'].min()} to {sp500_data['Date'].max()}")
-                print(f"Fear and Greed Index date range: {fgi_data['Date'].min()} to {fgi_data['Date'].max()}")
                 failed_protocols.append((protocol_name, protocol_type, str(e)))
                 continue
 
-    results = pd.DataFrame(all_results)
+    results_df = pd.DataFrame(all_results)
 
-    if results.empty:
+    if not results_df.empty:
+        print(results_df)
+        print(f"\n{protocol_type} Average Effects:")
+        print(f"Average immediate effect: {results_df[f'{"α" if protocol_type == "DeFi" else "β" if protocol_type == "DEX" else "γ"}2 (X)'].mean()}")
+        print(f"Average slope change: {results_df[f'{"α" if protocol_type == "DeFi" else "β" if protocol_type == "DEX" else "γ"}3 (X_T)'].mean()}")
+        print(f"Average market cap effect: {results_df['δ1 (MCt)'].mean()}")
+        print(f"Average Fear and Greed Index effect: {results_df['δ2 (Fear_Greed_Index)'].mean()}")
+        print(f"Average S&P 500 effect: {results_df['δ3 (S&P 500)'].mean()}")
+        print(f"Average ARIMA AR coefficient: {results_df['ARIMA_AR'].mean()}")
+        print(f"Average ARIMA MA coefficient: {results_df['ARIMA_MA'].mean()}")
+        print(f"Protocols with significant immediate effect: {(results_df['p_value (X)'] < 0.05).sum()}/{len(results_df)}")
+        print(f"Protocols with significant slope change: {(results_df['p_value (X_T)'] < 0.05).sum()}/{len(results_df)}")
+        print(f"Protocols with significant market cap effect: {(results_df['p_value (MCt)'] < 0.05).sum()}/{len(results_df)}")
+        print(f"Protocols with significant Fear and Greed Index effect: {(results_df['p_value (Fear_Greed_Index)'] < 0.05).sum()}/{len(results_df)}")
+        print(f"Protocols with significant S&P 500 effect: {(results_df['p_value (S&P 500)'] < 0.05).sum()}/{len(results_df)}")
+
+        # Save results to both 'predictions' and 'result' folders
+        results_df.to_csv(os.path.join(predictions_folder, f'{protocol_type.lower()}_analysis_results.csv'), index=False)
+        
+        result_folder = 'result'
+        if not os.path.exists(result_folder):
+            os.makedirs(result_folder)
+        results_df.to_csv(os.path.join(result_folder, f'{protocol_type.lower()}_analysis_results.csv'), index=False)
+    else:
         print(f"No results for {protocol_type}. Skipping...")
-        continue
 
-    print(results)
-    print(f"\n{protocol_type} Average Effects:")
-    print(f"Average immediate effect: {results['α2 or β2 or γ2 (X)'].mean()}")
-    print(f"Average slope change: {results['α3 or β3 or γ3 (X*T)'].mean()}")
-    print(f"Average market cap effect: {results['δ1 (MCt)'].mean()}")
-    print(f"Average Fear and Greed Index effect: {results['δ2 (Fear_Greed_Index)'].mean()}")
-    print(f"Average S&P 500 effect: {results['S&P 500'].mean()}")
-    print(f"Average ARIMA AR coefficient: {results['ARIMA_AR'].mean()}")
-    print(f"Average ARIMA MA coefficient: {results['ARIMA_MA'].mean()}")
-    print(f"Protocols with significant immediate effect: {(results['p_value (X)'] < 0.05).sum()}/{len(results)}")
-    print(f"Protocols with significant slope change: {(results['p_value (X*T)'] < 0.05).sum()}/{len(results)}")
-    print(f"Protocols with significant market cap effect: {(results['p_value (MCt)'] < 0.05).sum()}/{len(results)}")
-    print(f"Protocols with significant Fear and Greed Index effect: {(results['p_value (Fear_Greed_Index)'] < 0.05).sum()}/{len(results)}")
-    print(f"Protocols with significant S&P 500 effect: {(results['p_value (S&P 500)'] < 0.05).sum()}/{len(results)}")
+print(f"\nResults have been saved in both '{predictions_folder}' and '{result_folder}' folders.")
 
-    # Create 'result' folder if it doesn't exist
-    result_folder = 'result'
-    if not os.path.exists(result_folder):
-        os.makedirs(result_folder)
-
-    # Save results to CSV in the 'result' folder
-    results.to_csv(os.path.join(result_folder, f'{protocol_type.lower()}_analysis_results.csv'), index=False)
-
-print(f"\nResults have been saved in the '{result_folder}' folder.")
-
-# Print the list of protocols where analysis failed
+# Print and save the list of protocols where analysis failed
 print("\nProtocols where analysis failed:")
 for protocol, protocol_type, reason in failed_protocols:
     print(f"Protocol: {protocol}, Type: {protocol_type}, Reason: {reason}")
 
-# Save the failed protocols to a CSV file
 failed_df = pd.DataFrame(failed_protocols, columns=['Protocol', 'Type', 'Reason'])
+failed_df.to_csv(os.path.join(predictions_folder, 'failed_protocols.csv'), index=False)
 failed_df.to_csv(os.path.join(result_folder, 'failed_protocols.csv'), index=False)
-print(f"\nList of failed protocols has been saved to {os.path.join(result_folder, 'failed_protocols.csv')}")
+print(f"\nList of failed protocols has been saved to both '{predictions_folder}' and '{result_folder}' folders.")
