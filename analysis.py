@@ -20,23 +20,26 @@ def prepare_data(file_path, metric_name, mc_data, sp500_data, fgi_data, airdrop_
         print(f"Warning: {file_path} does not have exactly 61 days of data centered on the airdrop date.")
         return None, None
 
+    # Log transform the metric
+    df[metric_name] = np.log(df[metric_name])
+
     df['T'] = range(-30, 31)
     df['X'] = np.where(df['Date'] < airdrop_date, 0, 1)
     df['X_T'] = df['X'] * df['T']
     df['t'] = range(1, 62)
     df['t_X'] = df['t'] * df['X']
     
-    # Extend market cap data
+    # Extend and log transform market cap data
     extended_mc_data = mc_data[(mc_data['Date'] >= start_date) & (mc_data['Date'] <= end_date)]
     extended_mc_data = extended_mc_data.set_index('Date').reindex(df['Date']).reset_index()
-    extended_mc_data['MCt'] = extended_mc_data['MCt'].ffill().bfill()
+    extended_mc_data['MCt'] = np.log(extended_mc_data['MCt'].ffill().bfill())
     
-    # Extend S&P 500 data
+    # Extend and log transform S&P 500 data
     extended_sp500_data = sp500_data[(sp500_data['Date'] >= start_date) & (sp500_data['Date'] <= end_date)]
     extended_sp500_data = extended_sp500_data.set_index('Date').reindex(df['Date']).reset_index()
-    extended_sp500_data['Close'] = extended_sp500_data['Close'].ffill().bfill()
+    extended_sp500_data['Close'] = np.log(extended_sp500_data['Close'].ffill().bfill())
     
-    # Extend Fear and Greed Index data
+    # Extend Fear and Greed Index data (no log transform as it's already on a 0-100 scale)
     extended_fgi_data = fgi_data[(fgi_data['Date'] >= start_date) & (fgi_data['Date'] <= end_date)]
     extended_fgi_data = extended_fgi_data.set_index('Date').reindex(df['Date']).reset_index()
     extended_fgi_data['Fear_Greed_Index'] = extended_fgi_data['Fear_Greed_Index'].ffill().bfill()
@@ -120,8 +123,8 @@ def fit_model(df, metric_name, protocol_type):
     }
 
     # Add predicted values and model components to the dataframe
-    df['predicted_values'] = predicted_values
-    df['residuals'] = y - predicted_values
+    df['predicted_values'] = np.exp(predicted_values)  # Exponentiate to return to original scale
+    df['residuals'] = np.exp(y) - df['predicted_values']
     for col in X.columns:
         df[f'component_{col}'] = final_model.params[col] * X[col]
 
